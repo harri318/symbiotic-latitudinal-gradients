@@ -1,0 +1,164 @@
+# Calling ASVs combining soil samples and field (nodule) samples 
+# Move all the soil samples into the same folder with just the field samples (combined field samples from run 1 and 2) 
+# The field samples and soil samples were sequenced in two different runs and field was split to 2 runs but they were done under same specifications and same reads 
+# Make sure to use the SoilSamples_NEW for the soil sequences because these are the updated sequences for analysis from nanuq 
+
+# Put all names of sequence files into a new file and clean up names 
+ls *R1.fastq.gz > names.tsv 
+sed -i 's/MI.M05812_0216.001.FLD_ill//g' names.tsv
+sed -i 's/_R1.fastq.gz/_soil/g' names.tsv
+sed -i 's/.*[.]//' names.tsv
+sed -i 's/_super_soil/_nodule/g' names.tsv
+
+
+# Put all R1 reads into a forward file and R2 into reverse file 
+ls -ld $PWD/*R1.fastq.gz > forward.tsv
+awk '{print $9}' forward.tsv > forward2.tsv
+ls -ld $PWD/*R2.fastq.gz > reverse.tsv
+awk '{print $9}' reverse.tsv > reverse2.tsv
+
+# Combine all three files: names, forward2, and reverse2 into one manifest file for qiime 
+# Make sure to include "sample-id	forward-absolute-filepath	reverse-absolute-filepath" as the header with tabs in between the titles 
+paste names.tsv forward2.tsv reverse2.tsv > metadata_soilnodule.tsv
+
+# Activate qiime2
+conda activate qiime2-2020.11
+
+# Direct qiime2 to the files 
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path metadata_soilnodule.tsv \
+  --output-path paired-end-demux-soilnodule.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+
+# Summary of the data 
+qiime demux summarize \
+--i-data paired-end-demux-soilnodule.qza \
+--o-visualization paired-end-demux-soilnodule.qzv
+
+# Quality was good throughout no need to trim 
+# Make the frequency table 
+qiime dada2 denoise-paired \
+--i-demultiplexed-seqs paired-end-demux-soilnodule.qza \
+--p-trim-left-f 0 \
+--p-trim-left-r 0 \
+--p-trunc-len-f 250 \
+--p-trunc-len-r 250 \
+--p-n-threads 12 \
+--o-representative-sequences rep-seqs-soilnodule.qza \
+--o-table table-soilnodule.qza \
+--o-denoising-stats stats-dada2-soilnodule.qza
+
+# Summarize and visualize all the artifacts from denoising dada2 
+qiime metadata tabulate \
+  --m-input-file stats-dada2-soilnodule.qza \
+  --o-visualization stats-dada2-soilnodule.qzv
+  
+qiime feature-table summarize \
+  --i-table table-soilnodule.qza \
+  --o-visualization table-soilnodule.qzv
+  
+qiime feature-table tabulate-seqs \
+  --i-data rep-seqs-soilnodule.qza \
+  --o-visualization rep-seqs-soilnodule.qzv
+  
+  
+# Filter table based on abundance of features 
+qiime feature-table filter-features \
+  --i-table table-soilnodule.qza \
+  --p-min-frequency 20 \
+  --o-filtered-table table-filtered-sequence-soilnodule.qza
+
+# Greengenes taxanomic classification 
+# Import the database 
+qiime tools import \
+--type FeatureData[Sequence] \
+--input-path /ohta/tia.harrison/LatitudeProject/Run1and2/culture/combined/gg_13_8_otus/rep_set/99_otus.fasta \
+--output-path 99_otus_16S.qza
+
+# Import reference for 99% 
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-format HeaderlessTSVTaxonomyFormat \
+  --input-path /ohta/tia.harrison/LatitudeProject/Run1and2/culture/combined/gg_13_8_otus/taxonomy/99_otu_taxonomy.txt \
+  --output-path ref-taxonomy.qza
+
+# Assign taxonomy the same way that was done with field and culture samples 
+# Assign taxonomy based on query searches using Blast and 90% similarity 
+qiime feature-classifier classify-consensus-blast \
+--i-query rep-seqs-soilnodule.qza \
+--i-reference-taxonomy ref-taxonomy.qza \
+--i-reference-reads 99_otus_16S.qza \
+--o-classification taxonomy-samples-soilnodule.qza \
+--p-maxaccepts 1 \
+--p-perc-identity 0.90 
+
+
+# Visualize output 
+qiime metadata tabulate \
+  --m-input-file taxonomy-samples-soilnodule.qza \
+  --o-visualization taxonomy-samples-soilnodule.qzv
+
+# Filter the table to include only bacteria sequences just in case plant contaminants got in there 
+# Are there other things we should exclude from soil bacteria? What contaminants could be in soil? 
+qiime taxa filter-table \
+  --i-table table-filtered-sequence-soilnodule.qza \
+  --i-taxonomy taxonomy-samples-soilnodule.qza \
+  --p-exclude mitochondria,chloroplast \
+  --o-filtered-table table-filtered-sequence-soilnodule-tax.qza
+
+# Summarize the feature table to visualize the results and use in further downstream analysis   
+qiime feature-table summarize \
+--i-table  table-filtered-sequence-soilnodule-tax.qza \
+--o-visualization  table-filtered-sequence-soilnodule-tax.qzv 
+
+# Visualize the taxonomy in each sample using bar plots 
+# Add other information to the metadata file 
+qiime taxa barplot \
+  --i-table table-filtered-sequence-soilnodule-tax.qza \
+  --i-taxonomy taxonomy-samples-soilnodule.qza \
+  --m-metadata-file metadata_soil_nod.tsv \
+  --o-visualization taxa-bar-plots-sequence-soilnodule.qzv
+
+# Phylogenetic diversity analysis
+# Generate a phylogenetic tree to input into further analysis  
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs-soilnodule.qza \
+  --o-alignment aligned-rep-seqs-soilnodule.qza \
+  --o-masked-alignment masked-aligned-rep-seqs-soilnodule.qza \
+  --o-tree unrooted-tree-soilnodule.qza \
+  --o-rooted-tree rooted-tree-soilnodule.qza 
+  
+ 
+# Can move files to R to do rarefaction and other analyses in phyloseq
+# Prepare files for R and pull over to your computer along with the metadata file 
+# Make folder called R_files_soilnodule and run code to put files there 
+
+qiime tools export \
+	--input-path rooted-tree-soilnodule.qza \
+    --output-path R_files_soilnodule
+    
+qiime tools export \
+	--input-path taxonomy-samples-soilnodule.qza \
+    --output-path R_files_soilnodule
+
+qiime tools export \
+	--input-path table-filtered-sequence-soilnodule-tax.qza \
+    --output-path R_files_soilnodule
+    
+# Look at the taxonomy file in the R folder 
+head -n 2 taxonomy.tsv 
+
+# Change the header of your OTU table so that it can be input to the biom table 
+# Check the R_files folder to make sure that the names of the files match up to the following code 
+sed 's/Feature ID/#OTUID/' R_files_soilnodule/taxonomy.tsv | sed 's/Taxon/taxonomy/' | sed 's/Confidence/confidence/' > R_files_soilnodule/biom-taxonomy.tsv
+head -n 2 R_files_soilnodule/biom-taxonomy.tsv
+
+# Go into the R files to prep the biom object for R 
+biom add-metadata \
+    -i feature-table.biom \
+    -o table-with-taxonomy-soilnodule.biom \
+    --observation-metadata-fp biom-taxonomy.tsv \
+    --sc-separated taxonomy
+
+# Move to phyloseq in R for rarefying the data and further analysis 

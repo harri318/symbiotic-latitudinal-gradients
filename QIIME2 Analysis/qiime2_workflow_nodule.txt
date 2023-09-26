@@ -1,0 +1,268 @@
+# Calling ASVs in Latitude sequence data 
+# DAD2 tutorial from this site: https://benjjneb.github.io/dada2/tutorial.html to call amplicon sequence variants rather than OTUs, maybe try both just to see 
+# Qiime tutorial from this site: https://docs.qiime2.org/2020.6/tutorials/importing/#sequence-data-with-sequence-quality-information-i-e-fastq
+# Alternative tutorial for qiime: https://github.com/BikLab/BITMaB2-Tutorials/blob/master/QIIME2-metabarcoding-tutorial-already-demultiplexed-fastqs.md
+# My reads are based on the 341F and 805R primer for the v3-v4 region of 16S - 341F, 4 different forward and 4 different reverse primers were used 
+
+# Check the quality of a subset of reads in fastqc and check to see if adapters are still in reads using fastqc
+# No adapters present and quality looks good enough to continue 
+# There is high repeatability and high GC content but for 16S sequences I think this makes sense and it's okay? 
+
+# Samples are sequenced twice in two reads 
+# Make files for forward and reverse reads of each run 
+
+ls MI.M05812_0073*R1.fastq.gz > run1_R1.txt 
+ls MI.M05812_0075*R1.fastq.gz > run2_R1.txt 
+
+ls MI.M05812_0073.001*R2.fastq.gz > run1_R2.txt 
+ls MI.M05812_0075*R2.fastq.gz > run2_R2
+
+paste run1_R1.txt run2_R1.txt > forward_list.txt
+paste run1_R2.txt run2_R2 > reverse_list.txt
+
+# Cat together reads from both runs into one file per sample 
+# Make new directory called combined and put new files into it
+
+while read a b; do 
+	cat "$a" "$b" > combined/NEW_"$a"
+done < forward_list.txt
+
+while read a b; do 
+	cat "$a" "$b" > combined/NEW_"$a"
+done < reverse_list.txt
+
+# Check that the new files (containing run 1 and run 2) are approximately double the size of the files from each separate run 
+
+stat -c %s MI.M05812_0075.001.FLD0381.single_BA3_culture_R2.fastq.gz
+stat -c %s NEW_MI.M05812_0073.001.FLD0381.single_BA3_culture_R2.fastq.gz
+
+
+# Import the gzipped data into qiime so that it makes an artifact to use in future analysis
+# Data is paired end fastq file format and already demultiplexed 
+# Need to make manifest file for input 
+
+# Put all names of sequence files into a new file 
+
+ls *R1.fastq.gz > names.tsv 
+
+# Remove extra characters in the file name 
+
+sed -i 's/NEW_MI.M05812_0073.001.FLD*.//g' names.tsv
+sed -i 's/_R1.fastq.gz//g' names.tsv
+
+
+# Put all forward reads into one file and include the absolute path to the file 
+
+ls -ld $PWD/*R1.fastq.gz > forward.tsv
+
+# Print just the 9th column with just the information you want 
+
+awk '{print $9}' forward.tsv > forward2.tsv
+
+# Repeat the same procedure for the reverse reads 
+
+ls -ld $PWD/*R2.fastq.gz > reverse.tsv
+awk '{print $9}' reverse.tsv > reverse2.tsv
+
+# Combine all three files: names, forward2, and reverse2 into one manifest file for qiime 
+# Make sure to include "sample-id	forward-absolute-filepath	reverse-absolute-filepath" as the header with tabs in between the titles 
+
+paste names.tsv forward2.tsv reverse2.tsv > metadata_samples.tsv
+
+
+# Activate qiime for work session, then qiime should work from any directory   
+# conda activate qiime2-2020.6 is the old one before I updated it 
+
+conda activate qiime2-2020.11
+
+
+# Use the manifest file in qiime to direct the program towards the path of the files 
+# Make sure you specify the correct quality for inputting the sequences (Phred 33 not 64) 
+# Might need to run in background because this could take a while 
+
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path metadata_samples.tsv \
+  --output-path paired-end-demux.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+  
+  
+# Make a summary file of the input data 
+# Visualize the output from qiime by dragging over the files onto computer and into this link: https://view.qiime2.org/
+# Check to see if there are any samples with really low read counts 
+
+qiime demux summarize \
+--i-data paired-end-demux.qza \
+--o-visualization paired-end-demux.qzv
+
+
+# Based on the summary plots choose if you want to trim the beginnings and ends of the forward and reverse reads 
+# Phred 30 score means that 99.9% correct, phred score 20 means 90% correct 
+# In dada2 you do not need to do basic quality score based filtering beforehand, dada2 also joins paired end reads 
+# dada2 has internal chimera checking methods and abundance filtering so don't need any filtering afterward
+# This could take a while, perhaps put in a bash script and use nohup and & to run in background use --p-n-threads to quicken up the process
+# This is also creating a frequency table of ASVs 
+
+qiime dada2 denoise-paired \
+--i-demultiplexed-seqs paired-end-demux.qza \
+--p-trim-left-f 0 \
+--p-trim-left-r 0 \
+--p-trunc-len-f 250 \
+--p-trunc-len-r 250 \
+--p-n-threads 12 \
+--o-representative-sequences rep-seqs.qza \
+--o-table table.qza \
+--o-denoising-stats stats-dada2.qza
+
+
+# Summarize and visualize all the artifacts from denoising dada2 
+# Check how many reads passed filtering, how many were merged, and how many are non-chimeric (a chimera is a single DNA sequence originating from multiple transcripts) 
+# Unclear if for the table I need a metadata file (--m-sample-metadata-file sample-metadata.tsv) - don't need it but could be helpful in ordering the samples and including gps coordinates  
+
+qiime metadata tabulate \
+  --m-input-file stats-dada2.qza \
+  --o-visualization stats-dada2.qzv
+
+# Check how many of the different sequences occur in the different samples 
+# There are a lot of sequences that are unique to one sample - is this normal? 
+
+qiime feature-table summarize \
+  --i-table table.qza \
+  --o-visualization table.qzv
+  
+# Check statistics of length of unique sequences found 
+
+qiime feature-table tabulate-seqs \
+  --i-data rep-seqs.qza \
+  --o-visualization rep-seqs.qzv
+  
+  
+# Filter the frequency table based on abundance of features (ASVs)
+# The sample with the lowest feature count was 2931 so all samples are good to include (I would have maybe excluded samples with lower than 1500 sequences total) 
+# Make sure each ASV has at least 20 sequences 
+# Did have a filter so that the feature should be found in at least 5 samples but this really reduced it and decided to take that out 
+
+qiime feature-table filter-features \
+  --i-table table.qza \
+  --p-min-frequency 20 \
+  --o-filtered-table table-filtered-sequence.qza
+
+
+# Downloaded the latest version of Greengenes 16S sequences using wget 
+# For more info on Greengenes see the DeSantis (2006) and McDonald (2012) papers
+# Downloaded from https://docs.qiime2.org/2020.6/data-resources/
+# Use 16S only under the 99 folder because this is 99% similarity and for ASV this seems like the right choice 
+
+# Find your current path when in the directory with the Greengenes sequences 
+
+ls -ld $PWD
+
+# Import fasta file for the 16S 99% in Greengenes  
+
+qiime tools import \
+--type FeatureData[Sequence] \
+--input-path /ohta/tia.harrison/LatitudeProject/Run1and2/culture/combined/gg_13_8_otus/rep_set/99_otus.fasta \
+--output-path 99_otus_16S.qza
+
+# Import the taxonomy reference file for 99% in Greengenes 
+
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-format HeaderlessTSVTaxonomyFormat \
+  --input-path /ohta/tia.harrison/LatitudeProject/Run1and2/culture/combined/gg_13_8_otus/taxonomy/99_otu_taxonomy.txt \
+  --output-path ref-taxonomy.qza
+
+
+# First option for taxonomy assignment 
+# Assign taxonomy based on query searches using Blast  
+
+qiime feature-classifier classify-consensus-blast \
+--i-query rep-seqs.qza \
+--i-reference-taxonomy ref-taxonomy.qza \
+--i-reference-reads 99_otus_16S.qza \
+--o-classification taxonomy-samples9080.qza \
+--p-perc-identity 0.90 \  # Percent similarity with the greengenes sequence 
+--p-maxaccepts 1 \ # Only show one hit for the result 
+--p-query-cov 0.80 # How much of the sequence overlaps with greengenes sequence 
+
+
+# Visualize output 
+
+qiime metadata tabulate \
+  --m-input-file taxonomy-samples9080.qza \
+  --o-visualization taxonomy-samples9080.qzv
+  
+
+# Filter the table to include only bacteria sequences just in case something else got in there 
+
+qiime taxa filter-table \
+  --i-table table-filtered-sequence.qza \
+  --i-taxonomy taxonomy-samples9080.qza \
+  --p-exclude mitochondria,chloroplast \
+  --o-filtered-table tabled-filtered-sequence9080.qza
+  
+
+# Summarize the feature table to visualize the results and use in further downstream analysis   
+
+qiime feature-table summarize \
+--i-table  tabled-filtered-sequence9080.qza \
+--o-visualization  tabled-filtered-sequence9080.qzv 
+
+
+# Visualize the taxonomy in each sample using bar plots 
+# May need to do some further filtering for visualization purposes 
+# Add other information to the metadata file 
+
+qiime taxa barplot \
+  --i-table tabled-filtered-sequence9080.qza \
+  --i-taxonomy taxonomy-samples9080.qza \
+  --m-metadata-file metadata_samples_update.tsv \
+  --o-visualization taxa-bar-plots-sequence9080.qzv
+
+
+# Phylogenetic diversity analysis
+# Generate a phylogenetic tree to input into further analysis  
+
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza 
+
+  
+# Can move files to R to do rarefaction and other analyses in phyloseq
+# Prepare files for R and pull over to your computer along with the metadata file 
+
+qiime tools export \
+	--input-path rooted-tree.qza \
+    --output-path R_files_blast9080
+    
+qiime tools export \
+	--input-path taxonomy-samples9080.qza \
+    --output-path R_files_blast9080
+
+qiime tools export \
+	--input-path tabled-filtered-sequence9080.qza \
+    --output-path R_files_blast9080
+    
+
+# Check the header of the ASV table to see what it looks like 
+# Change the header of your OTU table so that it can be input to the biom table 
+# Check the R_files folder to make sure that the names of the files match up to the following code 
+
+head -n 2 taxonomy.tsv # Look at this in the R_file folder 
+sed 's/Feature ID/#OTUID/' R_files_sklearn/taxonomy.tsv | sed 's/Taxon/taxonomy/' | sed 's/Confidence/confidence/' > R_files_sklearn/biom-taxonomy.tsv
+head -n 2 R_files_sklearn/biom-taxonomy.tsv
+
+# Add the taxonomy data to the biom file 
+# Go into the R_files folder to do this command 
+
+biom add-metadata \
+    -i feature-table.biom \
+    -o table-with-taxonomy-sklearn.biom \
+    --observation-metadata-fp biom-taxonomy.tsv \
+    --sc-separated taxonomy
+
+
+# Move to phyloseq in R for rarefying the data and further analysis 

@@ -1,0 +1,329 @@
+---
+title: "Co-inoculation experiments"
+author: "Tia Harrison"
+date: "09/04/2021"
+output: github_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Set up 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+
+## Load the packages for analysis
+
+```{r packages}
+# Packages for analysis
+library(car) 
+library(lsmeans)
+library(multcomp)
+library(lme4)
+library(performance)
+library(see)
+library(gridExtra)
+library(wesanderson)
+library(RColorBrewer)
+library(R2admb)
+library(glmmADMB)
+library(dplyr)
+library(tidyverse)
+library(nationalparkcolors)
+library(ggpubr)
+```
+
+## Set contrasts 
+When performing an Anova, should set contrasts to use effects coding instead of the default (treatment contrasts).
+
+```{r contrasts}
+options(contrasts = c("contr.sum","contr.poly")) 
+```
+
+## Overdispersion function 
+Ben Bolker's function for testing overdispersion in poisson models  https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#overdispersion 
+
+```{r overdisp}
+overdisp_fun <- function(model) {
+rdf <- df.residual(model)
+rp <- residuals(model,type="pearson")
+Pearson.chisq <- sum(rp^2)
+prat <- Pearson.chisq/rdf
+pval <- pchisq(Pearson.chisq, df=rdf, lower.tail=FALSE)
+c(chisq=Pearson.chisq,ratio=prat,rdf=rdf,p=pval)
+}
+```
+
+
+# Data 
+
+## Load and explore the two datasets for analysis 
+The Bacillus data set was collected from the growth chamber experiment where plants that are tropical in origin (Costa Rica) were used in the experiment. The Pseudomonas data set was collected from the greenhouse experiment and the seeds and strains used in that experiment were from a temperate population in Virginia.
+
+```{r data}
+bacillus <- read_csv("Bacillus_data.csv") # This data already has the initial dead plants removed from it and has 95 plants in it
+pseudomonas <- read_csv("Pseudomonas_data.csv") # This data set is still the full dataset and has 270 plants in it 
+
+# Convert biomass to mg in bacillus dataset 
+# Pseudomonas data set is already in mg 
+# Convert to factor 
+bacillus <- bacillus%>% 
+  mutate(Aboveground_mg= Aboveground_g*1000) %>%
+  mutate(Belowground_mg=Belowground_g*1000) %>%
+  mutate(Rhizobia=as.factor(Rhizobia), 
+         Bacillus=as.factor(Bacillus), 
+         Block=as.factor(Block), 
+         Plant_ID=as.factor(Plant_ID))
+
+# Remove plants that died before treatment took effect 
+# Convert relevant data to factors
+pseudomonas2 <- pseudomonas %>% 
+  filter(Mortality1 == 1) %>%
+  mutate(Bradyrhizobia=as.factor(Bradyrhizobia), 
+         Pseudomonas=as.factor(Pseudomonas), 
+         Variovorax=as.factor(Variovorax),
+         Block=as.factor(Block), 
+         Plant_ID=as.factor(Plant_ID)) # Now the experiment has 216 plants in it 
+
+# Break down of how many plants alive at the end of the experiment 
+bacillus3 <- bacillus %>%
+  filter(Dead ==0) # 64 plants but if they are in the treatments with rhizobia might be enough to compare 
+
+pseudomonas3 <- pseudomonas2 %>%
+  filter(Dead ==0) # 164 plants alive at the end of the experiment 
+```
+
+# Analysis 
+
+## Tropical non-rhizobia strains 
+Test if the Bacillus strain have an impact on plant growth, nodule number, and nodule weight belowground, and whether or not there is an interaction with rhizobia inoculations. 
+
+```{r tropical nr_model}
+# histogram of aboveground data 
+hist(bacillus3$Aboveground_mg) 
+
+# aboveground model 
+mod_full_s <- lmer(log10(Aboveground_mg) ~ Bacillus*Rhizobia + (1|Family), data=bacillus3)
+
+# Check assumptions 
+plot(mod_full_s)
+qqnorm(resid(mod_full_s))
+qqline(resid(mod_full_s))
+plot(fitted(mod_full_s), sqrt(abs(resid(mod_full_s))), main="Scale-location")
+# Tried a bunch of things but the results came out all the same and this is the best fitting model 
+
+# Test significance and look at summary 
+summary(mod_full_s)
+Anova(mod_full_s, type=3)
+
+# Nodule analysis 
+hist(bacillus3$Nodule_no) 
+
+# Include random term for overdispersion 
+mod_nod_s <- glmer(Nodule_no ~ Bacillus*Rhizobia + (1|Family) + (1|Plant_ID), family=poisson(link="sqrt"),  data=bacillus3)
+
+# Test fit 
+plot(mod_nod_s)
+qqnorm(resid(mod_nod_s))
+qqline(resid(mod_nod_s))
+plot(fitted(mod_nod_s), sqrt(abs(resid(mod_nod_s))), main="Scale-location")
+
+# Check overdispersion 
+overdisp_fun(mod_nod_s) # if non-significant then no overdispersion 
+
+# Test significance and look at summary 
+summary(mod_nod_s)
+Anova(mod_nod_s, type=3)
+
+# Nodule weight 
+# Only performed on plants that formed nodules and so we removed Control and treatments without rhizobia
+bacillus_r <- bacillus3 %>%
+  filter(Rhizobia=="YES")
+
+# Look at the data 
+hist(bacillus_r$Nodule_weight_ug) 
+
+# Run model 
+mod_weight <- lmer(Nodule_weight_ug ~ Bacillus + (1|Family), data=bacillus_r)
+
+# Test significance and look at summary 
+Anova(mod_weight, type=3)
+summary(mod_weight)
+
+# Check assumptions 
+plot(mod_weight)
+qqnorm(resid(mod_weight))
+qqline(resid(mod_weight))
+plot(fitted(mod_weight), sqrt(abs(resid(mod_weight))), main="Scale-location") # everything looks good 
+```
+
+## Temperate non-rhizobia strains 
+Test whether the non-rhizobia strains Pseudomonas and Variovorax have impacts on plant growth and nodule formation when coinoculation with rhizobia. Look for interactions between all three strains inoculated on the plants. 
+
+```{r temperate nr_model}
+# histogram of aboveground data 
+hist(pseudomonas3$Aboveground_mg) 
+
+# Model on full data set with all treatments
+mod_full_ps <- lmer(log10(Aboveground_mg) ~ Bradyrhizobia*Pseudomonas*Variovorax + (1|Family) + (1|Block), data=pseudomonas3)
+
+# Check assumptions 
+plot(mod_full_ps)
+qqnorm(resid(mod_full_ps))
+qqline(resid(mod_full_ps))
+plot(fitted(mod_full_ps), sqrt(abs(resid(mod_full_ps))), main="Scale-location") # Pretty good fit! 
+
+# Test significance and look at summary 
+summary(mod_full_ps)
+Anova(mod_full_ps, type=3)
+
+
+# Nodules 
+# Data is overdispersed and zero -inflated but when we tried zero inflated models the model was overparametized
+# Ttesting the rhizobia treatments only worked best 
+pseudomonas_r <- pseudomonas3 %>%
+  filter(Bradyrhizobia=="Y")
+
+# look at the data 
+hist(pseudomonas3$Nodule_no) 
+
+# Fit the model 
+mod_nod_glm_full <- glmer(Nodule_no ~ Pseudomonas*Variovorax + (1|Family) + (1|Block) + (1|Plant_ID), family=poisson(link="sqrt"), data=pseudomonas_r)
+
+# Check assumptions 
+plot(mod_nod_glm_full)
+qqnorm(resid(mod_nod_glm_full))
+qqline(resid(mod_nod_glm_full))
+plot(fitted(mod_nod_glm_full), sqrt(abs(resid(mod_nod_glm_full))), main="Scale-location")
+overdisp_fun(mod_nod_glm_full)
+
+# Check significance  
+summary(mod_nod_glm_full)
+Anova(mod_nod_glm_full, type=3)
+```
+## Tests of variance 
+Testing whether variance in nodule number in the rhiozbia only treatments is different from in coinoculation treatments in both the tropical and temperate experiment data. 
+
+```{r variance}
+# tropical experiment 
+trop_variance <- bartlett.test(Nodule_no ~ Bacillus, bacillus_r)
+trop_variance
+
+# temperate experiment 
+temp_variance <- leveneTest(Nodule_no ~ Pseudomonas*Variovorax, pseudomonas_r)
+temp_variance
+```
+
+
+# Figures 
+Plotting the data for the tropical and temperate datasets 
+
+## Plotting aboveground biomass 
+```{r biomass plot}
+# Specify the colour palette 
+treatments3 <- park_palette("RockyMountains")
+grey_col <- brewer.pal(9, "Greys") 
+ 
+# Prep the data 
+bacillus34 <- bacillus3 %>%
+  mutate(rhizobia_new=ifelse(Rhizobia=="YES", "Rhizobia", "Control")) %>%
+  mutate(bacillus_new=ifelse(Bacillus=="YES", "          Bacillus", "Control")) %>%
+  mutate(bacillus_new=fct_relevel(bacillus_new, "Control", "          Bacillus"))
+
+# Plot tropical experiment full dataset 
+bacillus_mass <- ggplot(bacillus34, aes(x=bacillus_new, y=log10(Aboveground_g), fill=Rhizobia)) + 
+  geom_boxplot(fatten=1) +
+  (ylab("Log biomass (mg)"))+
+  (xlab(""))+
+  labs(tag = "(a)") +
+  facet_grid(~rhizobia_new, switch="x") +
+  scale_fill_manual(values = c("white", grey_col[4])) +
+  theme_classic() +
+  theme(legend.position="none",
+        axis.text.x=element_text(size=9, hjust = 0.98, angle=75),
+        strip.background =element_rect(fill=grey_col[2]))
+
+# Prep temperate data 
+pseudomonas34 <- pseudomonas3 %>%
+  mutate(rhizobia_new=ifelse(Bradyrhizobia=="Y", "Rhizobia", "Control")) %>%
+  mutate(treatment_new=ifelse(Pseudomonas =="N" & Variovorax =="N", "Control", Treatment)) %>%
+  mutate(treatment_new=ifelse(Pseudomonas=="Y" & Variovorax=="N", "Pseudomonas", treatment_new)) %>%
+  mutate(treatment_new=ifelse(Pseudomonas=="N" & Variovorax=="Y", "Variovorax", treatment_new)) %>%
+  mutate(treatment_new=ifelse(Pseudomonas=="Y" & Variovorax=="Y", "All strains", treatment_new)) %>%
+  mutate(treatment_new=fct_relevel(treatment_new, "Control", "Pseudomonas", "Variovorax", "All strains"))
+
+# Plot the temperate data 
+pseud_mass <- ggplot(pseudomonas34, aes(x=treatment_new, y=log10(Aboveground_mg), fill=rhizobia_new)) + 
+  geom_boxplot(fatten=1) +
+  (ylab("Log biomass (mg)"))+
+  (xlab(""))+
+  labs(tag = "(b)") +
+  facet_wrap(~rhizobia_new, switch="x") +
+  scale_fill_manual(values = c("white", grey_col[4])) +
+  theme_classic() +
+  theme(legend.position="none", 
+        axis.text.x=element_text(size=9, hjust = 0.98, angle=75),
+        strip.background =element_rect(fill=grey_col[2]))
+
+# Look at the plot 
+grid.arrange(bacillus_mass, pseud_mass,  
+             ncol=3, nrow=1, 
+             layout_matrix=rbind(c(1,2,2)))
+
+# Save the plot 
+# pdf(file="Biomass_plot.pdf", width=7, height=5)
+
+test3<-grid.arrange(bacillus_mass, pseud_mass,  
+             ncol=3, nrow=1, 
+             layout_matrix=rbind(c(1,2,2)))
+
+# dev.off()
+ggsave(filename="Figures/Biomass_plot.pdf", plot=test3)
+```
+
+## Plotting nodule number 
+```{r nodule plot}
+# Plot tropical experiment full dataset 
+bacillus_nod <- ggplot(bacillus34, aes(x=bacillus_new, y=Nodule_no, fill=Rhizobia)) + 
+  geom_boxplot(fatten=1) +
+  (ylab("Nodules (no)"))+
+  (xlab(""))+
+  labs(tag = "(a)") +
+  facet_grid(~rhizobia_new, switch="x") +
+  scale_fill_manual(values = c("white", grey_col[4])) +
+  theme_classic() +
+  theme(legend.position="none",
+        axis.text.x=element_text(size=9, hjust = 0.98, angle=75),
+        strip.background =element_rect(fill=grey_col[2]))
+
+# Plot the temperate data 
+pseud_nod <- ggplot(pseudomonas34, aes(x=treatment_new, y=Nodule_no, fill=rhizobia_new)) + 
+  geom_boxplot(fatten=1) +
+  (ylab("Nodules (no)"))+
+  (xlab(""))+
+  labs(tag = "(b)") +
+  facet_wrap(~rhizobia_new, switch="x") +
+  scale_fill_manual(values = c("white", grey_col[4])) +
+  theme_classic() +
+  theme(legend.position="none", 
+        axis.text.x=element_text(size=9, hjust = 0.98, angle=75),
+        strip.background =element_rect(fill=grey_col[2]))
+
+# Look at the plot 
+grid.arrange(bacillus_nod, pseud_nod,  
+             ncol=3, nrow=1, 
+             layout_matrix=rbind(c(1,2,2)))
+
+# Save the plot 
+# pdf(file="Nodule_plot.pdf", width=7, height=5)
+
+test4<-grid.arrange(bacillus_nod, pseud_nod,  
+             ncol=3, nrow=1, 
+             layout_matrix=rbind(c(1,2,2)))
+
+#dev.off() 
+ggsave(filename="Figures/Nodule_plot.pdf", plot=test4)
+```
+
