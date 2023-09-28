@@ -12,12 +12,15 @@ Mutualism is thought to be more prevalent in the tropics than temperate zones an
 ## Description of folders 
 
 1. Coinoculation Experiments
+   
 Data from greenhouse and growth chamber experiments testing the effects of rhizobia and non-rhizobia strains on host plant fitness. R code available for analysis of greenhouse data (nodule number, nodule weight, biomass)
 
-2. Latitude Analyses
+3. Latitude Analyses
+   
 Data includes ASV feature tables, ASV phylogenies, and taxonomy tables created from 16S sequence data using QIIME2. Metadata on samples and populations are also available. R scripts are included for analyzing ASV data and metadata for culture, nodule, and soil samples.
 
-3. QIIME2 Analyses
+5. QIIME2 Analyses
+   
 Code available for analyzing raw 16S sequence data in Linux. ASV feature tables, phylogenies, and taxonomy files created using this code was used for analysis in R (Latitude Analyses folder) 
 
 
