@@ -3,7 +3,7 @@
 ## Analysis for "Is there a latitudinal diversity gradient in symbiotic microbes? A case study with sensitive partridge peas"
 Tia L. Harrison, Zoe A. Parshuram, Megan E. Frederickson, John R. Stinchcombe 
 
-This repository stores code and data for analyses to be submitted for publication at Molecular Ecology 
+This repository stores code and data for analyses accompanying the publication in Molecular Ecology 
 
 ## Abstract 
 
@@ -20,4 +20,7 @@ Mutualism is thought to be more prevalent in the tropics than temperate zones an
 - QIIME2 Analyses
   - Code available for analyzing raw 16S sequence data in Linux. ASV feature tables, phylogenies, and taxonomy files created using this code was used for analysis in R (Latitude Analyses folder)
 
+## Sequence data 
+
+Raw sequence data for the QIIME2 analyses can be found on SRA under the BioProject PRJNA1029754 
 
